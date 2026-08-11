@@ -1,0 +1,5 @@
+{
+  "name": "Neon Cell Survival",
+  "description": "A mobile-friendly 2D canvas game where you control a growing cell, eat orbs, avoid bigger enemies, and survive.",
+  "requestFramePermissions": []
+}
