@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Neon Cell Survival</string>
+    <string name="title_activity_main">Neon Cell Survival</string>
+    <string name="package_name">com.abidos.neoncellsurvival</string>
+    <string name="custom_url_scheme">com.abidos.neoncellsurvival</string>
+</resources>

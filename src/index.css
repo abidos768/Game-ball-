@@ -1,80 +1,148 @@
 @import "tailwindcss";
 
 @theme {
-  --font-pixel: "Press Start 2P", monospace;
-  --font-retro: "VT323", monospace;
+  --font-sans: "Outfit Variable", ui-sans-serif, system-ui, sans-serif;
 }
 
-/* --- Retro arcade design system --- */
+/* ============================================================
+   Neon Cell — UI design system
 
-/* CRT scanline overlay for menu screens */
-.crt::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.18) 0px,
-    rgba(0, 0, 0, 0.18) 1px,
-    transparent 1px,
-    transparent 3px
-  );
-  z-index: 40;
+   The game canvas is smooth, glowing and modern. The chrome now
+   matches it: hairline borders, generous radii, one accent colour,
+   and depth from soft shadow rather than hard pixel offsets.
+   ============================================================ */
+
+:root {
+  --ncs-bg: #020617;
+  --ncs-surface: #0f172a;
+  --ncs-surface-2: #0b1220;
+  --ncs-line: rgba(148, 163, 184, 0.14);
+  --ncs-line-strong: rgba(148, 163, 184, 0.24);
+  --ncs-accent: #22d3ee;
 }
 
-/* Chunky pixel panel with a hard offset shadow */
-.px-card {
-  background: #0f172a; /* slate-900 */
-  border: 4px solid #334155; /* slate-700 */
-  box-shadow: 8px 8px 0 rgba(0, 0, 0, 0.7), 0 0 32px rgba(14, 165, 233, 0.12);
+html,
+body,
+#root {
+  height: 100%;
+  /* Dynamic viewport height: tracks the browser chrome collapsing instead of
+     assuming the largest possible viewport the way 100vh does. */
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.px-inset {
-  background: #020617; /* slate-950 */
-  border: 3px solid #1e293b; /* slate-800 */
+/* --- Surfaces --- */
+
+.card {
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid var(--ncs-line);
+  border-radius: 24px;
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
-/* Pixel buttons: hard shadow that collapses when pressed */
-.btn-px {
+.panel {
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid var(--ncs-line);
+  border-radius: 16px;
+}
+
+/* Small uppercase label. Replaces the 8px pixel-font captions —
+   a sans face needs more size and letter-spacing to read as a label. */
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* --- Buttons --- */
+
+.btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   width: 100%;
-  border: 4px solid;
-  font-family: var(--font-pixel);
-  font-size: 0.7rem;
-  line-height: 1.4;
-  text-transform: uppercase;
-  padding: 0.9rem 0.75rem;
+  border-radius: 16px;
+  padding: 0.95rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   color: #fff;
-  box-shadow: 4px 4px 0 #000;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: transform 0.05s ease-out, box-shadow 0.05s ease-out, background-color 0.1s;
+  transition: transform 0.12s ease, background-color 0.15s ease, opacity 0.15s ease;
 }
-.btn-px:active:not(:disabled) {
-  transform: translate(4px, 4px);
-  box-shadow: 0 0 0 #000;
+.btn:active:not(:disabled) { transform: scale(0.975); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary {
+  background: #0ea5e9;
+  box-shadow: 0 8px 24px -6px rgba(14, 165, 233, 0.7);
 }
-.btn-px-cyan { background: #0ea5e9; border-color: #7dd3fc; }
-.btn-px-cyan:hover:not(:disabled) { background: #0284c7; }
-.btn-px-slate { background: #1e293b; border-color: #475569; }
-.btn-px-slate:hover:not(:disabled) { background: #334155; }
-.btn-px-amber { background: #f59e0b; border-color: #fde68a; color: #020617; }
-.btn-px-amber:hover:not(:disabled) { background: #d97706; }
-.btn-px:disabled {
-  background: #1e293b;
-  border-color: #334155;
-  color: #64748b;
-  cursor: not-allowed;
+.btn-primary:hover:not(:disabled) { background: #0284c7; }
+
+.btn-ghost {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--ncs-line);
+  color: #cbd5e1;
+}
+.btn-ghost:hover:not(:disabled) { background: rgba(148, 163, 184, 0.14); }
+
+.btn-amber {
+  background: #f59e0b;
+  color: #1c1206;
+  box-shadow: 0 8px 24px -6px rgba(245, 158, 11, 0.6);
+}
+.btn-amber:hover:not(:disabled) { background: #d97706; }
+
+/* Compact variant for the secondary row on the title screen */
+.btn-sm {
+  padding: 0.7rem 0.5rem;
+  font-size: 0.8rem;
+  border-radius: 14px;
 }
 
-/* Blinking arcade prompt */
-.blink { animation: px-blink 1.1s steps(2, start) infinite; }
-@keyframes px-blink { to { visibility: hidden; } }
+/* Promote to its own compositor layer. Used on the HUD so the canvas
+   repainting every frame underneath can't drag it into the same repaint. */
+.gpu-layer {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* --- Motion --- */
+
+.pop-in { animation: ncs-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+@keyframes ncs-pop {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.fade-in { animation: ncs-fade 0.3s ease both; }
+@keyframes ncs-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.pulse-soft { animation: ncs-pulse 2.4s ease-in-out infinite; }
+@keyframes ncs-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+.drift { animation: ncs-drift 9s ease-in-out infinite; }
+@keyframes ncs-drift {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(6px, -10px); }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .blink { animation: none; }
-  .btn-px { transition: none; }
+  .pop-in, .fade-in, .pulse-soft, .drift { animation: none; }
+  .btn { transition: none; }
 }

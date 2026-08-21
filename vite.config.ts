@@ -1,16 +1,19 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
   return {
+    // Capacitor serves from a local origin where absolute '/assets/...'
+    // paths 404. Must stay relative.
+    base: './',
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
+        disable: mode === 'development',
         registerType: 'autoUpdate',
         includeAssets: ['apple-touch-icon.png'],
         manifest: {
@@ -28,26 +31,13 @@ export default defineConfig(({mode}) => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
-          // Cache the Google Fonts so the pixel fonts work offline
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {cacheName: 'google-fonts-css', expiration: {maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365}},
-            },
-            {
-              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {cacheName: 'google-fonts-files', expiration: {maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365}},
-            },
-          ],
+          // woff2 included: the pixel fonts are now bundled, not fetched.
+          globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+          clientsClaim: true,
+          skipWaiting: true,
         },
       }),
     ],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

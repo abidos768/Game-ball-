@@ -11,3 +11,11 @@ coverage/
 *.keystore
 *.jks
 android/keystore.properties
+
+# Scratch folders left behind by unzipping patches
+neon-*-temp/
+
+# IDE
+.idea/
+android/.idea/
+*.iml

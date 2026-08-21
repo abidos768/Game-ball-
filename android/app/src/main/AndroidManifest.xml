@@ -40,4 +40,6 @@
     <!-- The game is fully offline: no INTERNET permission is requested.
          Add it back when you integrate AdMob in a later release. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Haptic feedback. Without this navigator.vibrate() silently no-ops. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

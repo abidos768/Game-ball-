@@ -16,13 +16,14 @@ const config: CapacitorConfig = {
 
   plugins: {
     SplashScreen: {
-      launchShowDuration: 800,
-      launchAutoHide: true,
+      launchShowDuration: 3000,
+      // App.tsx hides it once React has painted the first frame.
+      launchAutoHide: false,
       backgroundColor: '#020617',
       showSpinner: false,
       androidScaleType: 'CENTER_CROP',
       splashFullScreen: true,
-      splashImmersiveType: true,
+      splashImmersive: true,
     },
     StatusBar: {
       style: 'DARK',
