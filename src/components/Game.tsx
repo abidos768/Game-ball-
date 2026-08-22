@@ -10,7 +10,8 @@ import {
 } from '../game/flow';
 import type { FlowState } from '../game/flow';
 import {
-  themeForLevel, stageName, stageNumber, blendFrom, easeToward, css,
+  themeForLevel, stageName, stageNumber, css,
+  createTransition, advanceTransition, hungerRate, type StageTransition,
 } from '../game/stages';
 import type { Skin, SaveData, TrophyDef } from '../game/meta';
 
@@ -134,6 +135,61 @@ export default function Game() {
   // --- Meta-game state (persisted) ---
   const [save, setSave] = useState<SaveData>(() => loadSave());
   const [screen, setScreen] = useState<'home' | 'shop' | 'trophies' | 'howto' | 'privacy'>('home');
+  const [privacyScrolled, setPrivacyScrolled] = useState(false);
+  const privacyScrollRef = useRef<HTMLDivElement>(null);
+  const privacyEndRef = useRef<HTMLDivElement>(null);
+  /** True only for the mandatory first-run showing - no back button, no escape. */
+  const [privacyForced, setPrivacyForced] = useState(false);
+  const privacyForcedRef = useRef(false);
+  useEffect(() => { privacyForcedRef.current = privacyForced; }, [privacyForced]);
+
+  // Shown once on first launch as a blocking step, then it's just a menu entry.
+  //
+  // The 'seen' flag is written when the player AGREES, not when the screen
+  // opens. Writing it on open meant force-quitting during the policy counted
+  // as having accepted it, and it would never be shown again.
+  useEffect(() => {
+    if (!localStorage.getItem('neon-cell-privacy-seen')) {
+      setPrivacyForced(true);
+      setScreen('privacy');
+    }
+  }, []);
+
+  const acceptPrivacy = () => {
+    sfx.click();
+    haptics.tap();
+    localStorage.setItem('neon-cell-privacy-seen', '1');
+    setPrivacyForced(false);
+    setScreen('home');
+  };
+
+  /**
+   * Unlock the confirm button when the end of the policy becomes visible.
+   *
+   * This was scroll arithmetic (scrollHeight - scrollTop - clientHeight) on the
+   * container. Two ways that failed: the container wasn't actually the
+   * scrolling element, so no scroll event ever fired; and if the text fitted
+   * without scrolling there was nothing to scroll and no way to ever enable it.
+   *
+   * An observer on a sentinel at the end of the text has neither problem - it
+   * fires when the end is on screen, however that happened, including when it
+   * was on screen from the start.
+   */
+  useEffect(() => {
+    if (screen !== 'privacy') return;
+    setPrivacyScrolled(false);
+    const end = privacyEndRef.current;
+    if (!end) return;
+    const io = new IntersectionObserver(
+      entries => {
+        // Latch: scrolling back up shouldn't withdraw the confirmation.
+        if (entries.some(e => e.isIntersecting)) setPrivacyScrolled(true);
+      },
+      { root: privacyScrollRef.current, threshold: 0.9 },
+    );
+    io.observe(end);
+    return () => io.disconnect();
+  }, [screen]);
   const screenRef = useRef(screen);
   useEffect(() => { screenRef.current = screen; }, [screen]);
   const [newTrophies, setNewTrophies] = useState<TrophyDef[]>([]);
@@ -160,7 +216,9 @@ export default function Game() {
   const stepRef = useRef({ last: 0, acc: 0 });
   // Live palette. Eased toward the current stage each frame so the arena
   // fades between stages instead of cutting.
-  const paletteRef = useRef(blendFrom(themeForLevel(1)));
+  const paletteRef = useRef<StageTransition>(createTransition(themeForLevel(1)));
+  /** Timestamp of the last rendered frame, for the stage crossfade. */
+  const paletteClockRef = useRef(0);
   // Camera shake is the one effect that can actually make someone motion-sick.
   // index.css already honours prefers-reduced-motion for the UI; the canvas has
   // to check it itself.
@@ -231,7 +289,8 @@ export default function Game() {
       shake: 0,
       hurtFlash: 0,
     };
-    paletteRef.current = blendFrom(themeForLevel(1));
+    paletteRef.current = createTransition(themeForLevel(1));
+    paletteClockRef.current = 0;
     setNewTrophies([]);
     spawnInitialEntities();
     setUiState({ status: 'playing', score: 0, level: 1, size: 20 });
@@ -621,10 +680,22 @@ export default function Game() {
     s.maintTick++;
     if (s.maintTick % 15 === 0) maintainWorld();
 
-    // Hunger mechanic (shrink over time)
-    // Lose about 1% of size every 5 seconds (at ~60 FPS, 5 sec = 300 frames)
-    s.player.r -= s.player.r * (0.01 / 300);
-    if (s.player.r < 10) {
+    // Hunger.
+    //
+    // This is meant to be the core pressure of the game, and at the old rate it
+    // was arithmetically invisible: 0.2%/sec meant the displayed size ticked
+    // down once every 25 seconds at size 20, and a single green orb undid
+    // twelve seconds of it. The bar looked broken because nothing moved.
+    //
+    // 1.2%/sec ticks the number about every 4 seconds and asks for roughly one
+    // orb every 2 seconds to hold steady - real pressure, and well inside the
+    // orb density the arena maintains (110-240 at any time).
+    //
+    // Proportional rather than flat, so large cells starve faster in absolute
+    // terms and runaway growth is self-limiting.
+    // Rate ramps with the stage - see hungerRate() in stages.ts.
+    s.player.r -= s.player.r * (hungerRate(s.level) / 60);
+    if (s.player.r < DEATH_R) {
       gameOver();
       return;
     }
@@ -1045,7 +1116,7 @@ export default function Game() {
       status: s.status,
       score: s.score,
       level: s.level,
-      size: Math.floor(s.player.r),
+      size: Math.round(s.player.r * 10) / 10,
       shield: Math.ceil(s.player.invincibleTimer / 60),
       magnet: Math.ceil(s.player.magnetTimer / 60),
       freeze: Math.ceil(s.freezeTimer / 60),
@@ -1073,8 +1144,16 @@ export default function Game() {
     // Everything below is themed by stage, so the arena visibly changes every
     // few levels rather than staying one flat blue field forever. The palette
     // is eased rather than switched - see easeToward.
-    easeToward(paletteRef.current, themeForLevel(s.level));
-    const pal = paletteRef.current;
+    // Stage crossfade, driven by real elapsed time so it takes the same three
+    // seconds regardless of refresh rate. Clamped so returning from background
+    // doesn't jump the fade to its end.
+    const nowMs = performance.now();
+    const dtMs = paletteClockRef.current
+      ? Math.min(100, nowMs - paletteClockRef.current)
+      : 16.7;
+    paletteClockRef.current = nowMs;
+    advanceTransition(paletteRef.current, themeForLevel(s.level), dtMs);
+    const pal = paletteRef.current.live;
 
     // Actual backing-store scale in use. drawCircle needs it to know how many
     // real pixels an entity will occupy, which decides sprite vs path.
@@ -1215,18 +1294,8 @@ export default function Game() {
     // Draw Enemies (dimmed while frozen)
     const enemiesFrozen = s.freezeTimer > 0;
     s.enemies.forEach(enemy => {
-      if (enemiesFrozen) ctx.globalAlpha = 0.5;
 
-      // Colour by relationship, not by type. The single most important thing
-      // to read in this game is "can that eat me, or can I eat it?", and
-      // judging it by comparing two circles by eye is unreliable at speed.
-      const isPrey =
-        enemy.type === 'normal' && s.player.r > enemy.r * EAT_RATIO;
-      drawCircle(
-        enemy.x, enemy.y, enemy.r,
-        isPrey ? COLORS.enemyPrey : enemy.color,
-        isPrey ? COLORS.enemyPreyGlow : enemy.glow,
-      );
+      drawCircle(enemy.x, enemy.y, enemy.r, enemy.color, enemy.glow);
 
       // Wind-up telegraph.
       //
@@ -1241,7 +1310,7 @@ export default function Game() {
           const t = 1 - remaining / 30;          // 0 -> 1 as the shot nears
           const ring = enemy.r + 26 * (1 - t);   // contracts onto the cell
           ctx.save();
-          ctx.globalAlpha = (enemiesFrozen ? 0.5 : 1) * (0.25 + 0.55 * t);
+          ctx.globalAlpha = 0.25 + 0.55 * t;
           ctx.strokeStyle = COLORS.projectile;
           ctx.lineWidth = 2 + 2 * t;
           ctx.beginPath();
@@ -1368,12 +1437,11 @@ export default function Game() {
         ctx.fillStyle = color;
         ctx.fill();
       };
-      // Power-ups
-      s.orbs.forEach(o => {
-        if (o.type === 'shield' || o.type === 'magnet' || o.type === 'freeze' || o.type === 'radar') {
-          dot(o.x, o.y, 2.5, o.color);
-        }
-      });
+      // Threats only.
+      //
+      // Power-up dots used to appear here too. The radar is up for eight
+      // seconds and its job is to tell you what can kill you and where it is;
+      // collectibles on the same tiny surface just competed for the glance.
       // Enemies (bosses bigger)
       s.enemies.forEach(e => {
         if (e.type === 'projectile') return;
@@ -1504,6 +1572,10 @@ export default function Game() {
             setUiState(p => ({ ...p, status: 'paused' }));
           } else if (st === 'paused' || st === 'gameover' || st === 'reviving') {
             goToMenu();
+          } else if (privacyForcedRef.current) {
+            // First-run privacy is a blocking step: the hardware back button
+            // must not dismiss it, or the agreement means nothing.
+            haptics.tap();
           } else if (screenRef.current !== 'home') {
             setScreen('home');
           } else {
@@ -1832,16 +1904,24 @@ export default function Game() {
           <div className="w-full max-w-xs mx-auto mt-2">
             <div className="flex justify-between label text-slate-400 mb-1 px-1">
               <span>STARVING</span>
-              <span>SIZE {uiState.size}</span>
+              <span>SIZE {uiState.size.toFixed(1)}</span>
             </div>
+            {/* Bar shows seconds of life left at the current hunger rate, not
+                raw size. A size scale pinned at 100% for anything above 50 and
+                stopped moving exactly when the run got interesting; time to
+                starve keeps moving at every size, and matches the label. */}
             <div className="h-2 w-full bg-slate-900/70 border border-white/10 rounded-full overflow-hidden">
-              <div 
-                className={`h-full rounded-full transition-all duration-200 ease-out ${
+              <div
+                className={`h-full rounded-full transition-all duration-300 ease-out ${
                   uiState.size < 15
                     ? 'bg-gradient-to-r from-rose-600 to-rose-400'
                     : 'bg-gradient-to-r from-cyan-500 to-cyan-300'
                 }`}
-                style={{ width: `${Math.min(100, Math.max(0, (uiState.size - 10) / 40 * 100))}%` }}
+                style={{
+                  width: `${Math.min(100, Math.max(0,
+                    (Math.log(Math.max(uiState.size, 10.01) / 10) / hungerRate(uiState.level)) / 180 * 100,
+                  ))}%`,
+                }}
               />
             </div>
             {(uiState.shield > 0 || uiState.magnet > 0 || uiState.freeze > 0 || uiState.radar > 0) && (
@@ -1961,7 +2041,7 @@ export default function Game() {
               <div className="w-11" />
             </div>
 
-            <div className="overflow-y-auto -mx-1 px-1">
+            <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1" ref={privacyScrollRef}>
               <div className="panel p-4 mb-4">
                 <div className="label text-slate-500 mb-2">The one rule</div>
                 <p className="text-sm text-slate-300 leading-relaxed">
@@ -1983,13 +2063,13 @@ export default function Game() {
                   body="A burst of speed for three seconds, and a bigger size boost."
                 />
                 <LegendRow
-                  color={COLORS.enemyPrey} size={17}
-                  title="Amber cell — prey"
-                  body="Small enough to absorb. Run it down."
+                  color={COLORS.enemy} size={13}
+                  title="Small red cell"
+                  body="Smaller than you. Absorb it, or shoot it for the orbs it drops."
                 />
                 <LegendRow
-                  color={COLORS.enemy} size={22}
-                  title="Red cell — threat"
+                  color={COLORS.enemy} size={24}
+                  title="Large red cell"
                   body="Bigger than you. Contact ends the run. Shoot it or keep away."
                 />
                 <LegendRow
@@ -2043,18 +2123,22 @@ export default function Game() {
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10 safe-inset">
           <div className="card pop-in p-6 max-w-sm w-full mx-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between mb-3">
-              <button
-                onClick={() => { sfx.click(); setScreen('home'); }}
-                aria-label="Back to menu"
-                className="btn btn-ghost !w-auto !p-3"
-              >
-                <ArrowLeft className="w-4 h-4" />
-              </button>
+              {privacyForced ? (
+                <div className="w-11" />
+              ) : (
+                <button
+                  onClick={() => { sfx.click(); setScreen('home'); }}
+                  aria-label="Back to menu"
+                  className="btn btn-ghost !w-auto !p-3"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              )}
               <h2 className="text-xl font-semibold tracking-tight text-white">Privacy</h2>
               <div className="w-11" />
             </div>
 
-            <div className="overflow-y-auto -mx-1 px-1">
+            <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">
               <div className="panel p-4 mb-4">
                 <p className="text-sm text-slate-200 leading-relaxed">
                   This game collects nothing, sends nothing, and has no way to.
@@ -2098,10 +2182,22 @@ export default function Game() {
               <p className="text-xs text-slate-600 leading-snug mt-5">
                 Neon Cell Survival · v1.0.0
               </p>
+              {/* End-of-policy sentinel: watched by the observer above. */}
+              <div ref={privacyEndRef} className="h-px w-full" aria-hidden />
             </div>
 
-            <button onClick={() => { sfx.click(); setScreen('home'); }} className="btn btn-ghost mt-4">
-              Close
+            <button 
+              onClick={() => {
+                if (!privacyScrolled) return;
+                if (privacyForced) acceptPrivacy();
+                else { sfx.click(); haptics.tap(); setScreen('home'); }
+              }}
+              disabled={!privacyScrolled}
+              className={`btn mt-4 ${privacyScrolled ? 'btn-primary' : 'btn-ghost'}`}
+            >
+              {!privacyScrolled
+                ? 'Scroll to continue'
+                : privacyForced ? 'Agree and continue' : 'Got it'}
             </button>
           </div>
         </div>

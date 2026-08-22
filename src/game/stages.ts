@@ -88,6 +88,27 @@ export function stageNumber(level: number): number {
   return Math.floor((Math.max(1, level) - 1) / LEVELS_PER_STAGE) + 1;
 }
 
+/**
+ * Hunger, as a fraction of size lost per second.
+ *
+ * Ramps with the stage so late runs squeeze harder - by stage 9 you're losing
+ * size twice as fast as at the start, which is what stops a large cell from
+ * coasting once it has out-grown everything on screen.
+ *
+ * Exported and shared: the update loop applies it and the HUD's time-to-starve
+ * bar divides by it. Two copies of this number would mean a bar that lies.
+ */
+export const HUNGER_BASE = 0.012;
+export const HUNGER_PER_STAGE = 0.0015;
+export const HUNGER_MAX = 0.024;
+
+export function hungerRate(level: number): number {
+  return Math.min(
+    HUNGER_MAX,
+    HUNGER_BASE + (stageNumber(level) - 1) * HUNGER_PER_STAGE,
+  );
+}
+
 export function themeForLevel(level: number): StageTheme {
   return STAGES[(stageNumber(level) - 1) % STAGES.length];
 }
@@ -131,17 +152,69 @@ export function blendFrom(theme: StageTheme): BlendState {
 }
 
 /**
- * Ease the live palette toward the target stage.
+ * Timed crossfade between stages.
  *
- * Called once per rendered frame.
+ * The previous version eased a fixed fraction per rendered frame. Two problems:
+ * the duration depended on frame rate (a 120 Hz phone transitioned twice as
+ * fast as a 60 Hz one), and an exponential ease has no end - it approaches the
+ * target forever, so the last stretch of the change crawled and the whole thing
+ * read as mushy rather than deliberate.
  *
- * At 0.01 the change worked out to roughly 1 deltaE per second, which is at or
- * below the threshold of perception - the arena appeared not to change at all.
- * 0.022 settles in about 2.5s: clearly a transition, still not a cut.
+ * This is a real transition: fixed wall-clock duration, smoothstep easing so it
+ * starts and ends gently with the movement in the middle, and an actual
+ * finishing point.
  */
-export function easeToward(current: BlendState, target: StageTheme, rate = 0.022) {
-  current.bg = mixRGBA(current.bg, target.bg, rate);
-  current.grid = mixRGBA(current.grid, target.grid, rate);
-  current.gridMajor = mixRGBA(current.gridMajor, target.gridMajor, rate);
-  current.wall = mixRGBA(current.wall, target.wall, rate);
+export const STAGE_FADE_MS = 3000;
+
+export type StageTransition = {
+  from: BlendState;
+  to: StageTheme;
+  /** Milliseconds elapsed. Clamped at STAGE_FADE_MS. */
+  elapsed: number;
+  live: BlendState;
+};
+
+export function createTransition(theme: StageTheme): StageTransition {
+  return {
+    from: blendFrom(theme),
+    to: theme,
+    elapsed: STAGE_FADE_MS,
+    live: blendFrom(theme),
+  };
+}
+
+/** Ease in and out. Removes the hard onset a linear fade has. */
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Advance the crossfade. `dtMs` is real elapsed time, so the transition takes
+ * the same three seconds on any display.
+ */
+export function advanceTransition(
+  tr: StageTransition,
+  target: StageTheme,
+  dtMs: number,
+) {
+  // Retarget mid-fade from wherever the colours currently are, so a stage
+  // change during a transition doesn't snap back to the previous stage.
+  if (target !== tr.to) {
+    tr.from = {
+      bg: [...tr.live.bg],
+      grid: [...tr.live.grid],
+      gridMajor: [...tr.live.gridMajor],
+      wall: [...tr.live.wall],
+    };
+    tr.to = target;
+    tr.elapsed = 0;
+  }
+
+  tr.elapsed = Math.min(STAGE_FADE_MS, tr.elapsed + dtMs);
+  const t = smoothstep(tr.elapsed / STAGE_FADE_MS);
+
+  tr.live.bg = mixRGBA(tr.from.bg, target.bg, t);
+  tr.live.grid = mixRGBA(tr.from.grid, target.grid, t);
+  tr.live.gridMajor = mixRGBA(tr.from.gridMajor, target.gridMajor, t);
+  tr.live.wall = mixRGBA(tr.from.wall, target.wall, t);
 }
